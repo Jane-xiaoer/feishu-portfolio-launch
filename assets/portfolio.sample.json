@@ -1,0 +1,34 @@
+{
+  "_refreshed_at": "2026-04-14T06:32:33.410950+00:00",
+  "_count": 2,
+  "_stats": {
+    "AI 短片": 1,
+    "广告": 1
+  },
+  "items": [
+    {
+      "record_id": "recnDemo001",
+      "title": "样片 1",
+      "order": 1,
+      "categories": ["AI 短片"],
+      "duration": "00:12",
+      "tools": "Runway, Midjourney",
+      "video_token": "boxcnVideoToken001",
+      "video_url": "https://open.feishu.cn/open-apis/drive/v1/medias/batch_get_tmp_download_url?...",
+      "cover_token": "boxcnCoverToken001",
+      "cover_url": "https://open.feishu.cn/open-apis/drive/v1/medias/batch_get_tmp_download_url?..."
+    },
+    {
+      "record_id": "recnDemo002",
+      "title": "样片 2",
+      "order": 2,
+      "categories": ["广告"],
+      "duration": "00:30",
+      "tools": "Kling",
+      "video_token": "boxcnVideoToken002",
+      "video_url": "https://open.feishu.cn/open-apis/drive/v1/medias/batch_get_tmp_download_url?...",
+      "cover_token": "",
+      "cover_url": ""
+    }
+  ]
+}

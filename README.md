@@ -96,6 +96,12 @@ Claude Code 会自动调用这个 Skill。
 - `LARK_BASE_TOKEN`
 - `LARK_TABLE_ID`
 
+Skill 仓库里已经附带可复制模板：
+
+- `assets/refresh.py`
+- `assets/refresh.yml`
+- `assets/portfolio.sample.json`
+
 ---
 
 ## 实际效果
