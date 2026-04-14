@@ -14,7 +14,7 @@
 2. **生成 HTML 网页** — 瀑布流展示，分类筛选，点击播放，你选风格
 3. **上线 GitHub Pages** — 免费托管，几分钟可访问
 4. **绑定自定义域名**（可选）— DNS 引导 + 自动配置 CNAME
-5. **设置自动刷新** — 飞书链接 24 小时过期，Mac 每 20 小时自动换新链接
+5. **设置自动刷新** — 飞书链接 24 小时过期，由 GitHub Actions 每 12 小时自动换新链接
 
 **你只需要：** 提供表格链接 → 选风格 → 确认预览 → 在 DNS 控制台加几条记录
 
@@ -73,13 +73,38 @@ Claude Code 会自动调用这个 Skill。
 
 ---
 
+## 现在的默认路线
+
+这个 Skill 现在默认采用：
+
+`Feishu Bitable -> refresh.py -> api/*.json -> GitHub Actions -> GitHub Pages`
+
+不再默认依赖本地 `launchd` 或者用户自己的电脑长期开机。
+
+仓库里会生成：
+
+- `refresh.py`
+- `.github/workflows/refresh.yml`
+- `api/videos.json`
+- `api/covers.json`
+- `api/portfolio.json`
+
+并要求配置这 4 个 GitHub Secrets：
+
+- `LARK_APP_ID`
+- `LARK_APP_SECRET`
+- `LARK_BASE_TOKEN`
+- `LARK_TABLE_ID`
+
+---
+
 ## 实际效果
 
 用这套方法搭出来的网站示例：**[xiaoerai.xyz](https://xiaoerai.xyz)**
 
 - 46 个 AI 视频作品
 - 瀑布流布局，分类筛选
-- 飞书链接每 20 小时自动刷新
+- 飞书链接由 GitHub Actions 自动刷新
 
 ---
 

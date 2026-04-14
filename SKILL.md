@@ -1,341 +1,365 @@
 ---
 name: feishu-portfolio-launch
-description: 从飞书多维表格链接出发，边操作边引导，最终把作品集网站上线到 GitHub Pages + 自定义域名。适用于视频/图片附件存在飞书、需要对外展示的创作者（AI视频、摄影、设计、样片库等）。不适合博客、电商、需要后端写入的场景。
+description: 从飞书多维表格链接出发，生成并上线作品集网站到 GitHub Pages，并用 GitHub Actions 定时刷新飞书临时媒体链接。适用于视频/图片附件存在飞书、需要对外展示的创作者（AI 视频、摄影、设计、样片库等）。不适合博客、电商、需要后端写入的场景。
 ---
 
 # Feishu Portfolio Launch
 
 ## 这个 Skill 做什么
 
-**一句话：给我飞书多维表格链接，我带你把作品集网站上线。**
+一句话：**给我飞书多维表格链接，我把作品集网站搭出来，并把“飞书临时链接会过期”这件事自动化处理掉。**
 
-整个过程我会一步一步引导，你只需要：
-- 告诉我飞书表格链接
-- 选择网站风格
-- 在浏览器确认预览效果
-- 在 DNS 控制台添加几条记录（5分钟，可选）
+默认交付物：
+- `index.html` 或静态前端页面
+- `api/videos.json`
+- `api/covers.json`
+- `api/portfolio.json`
+- `refresh.py`
+- `.github/workflows/refresh.yml`
 
-其他的技术活全部我来。
+目标结果：
+- 网站部署在 GitHub Pages
+- 飞书媒体链接由 GitHub Actions 每 12 小时自动刷新
+- 用户不用保持自己的电脑开机
 
 ---
 
-## 适用网站类型
+## 适用场景
 
-✅ **适合**
-- AI 视频 / 图片作品集（附件在飞书多维表格）
+✅ 适合：
+- AI 视频 / 图片作品集
 - 摄影、设计、创意样片库
 - 客户案例展示站
-- 任何「内容存飞书 → 对外展示」的场景
+- 任何「内容在飞书附件里，前台只负责展示」的场景
 
-❌ **不适合**
-- 图文博客（没有文件附件）
-- 电商、支付、用户注册
-- 需要实时写入数据库的场景
+❌ 不适合：
+- 图文博客
+- 电商、支付、登录系统
+- 需要数据库写入和后端业务逻辑的网站
 
-**核心限制说明：** 飞书视频/图片临时播放链接 24 小时过期。Skill 会在你的 Mac 上设置自动刷新脚本（每 20 小时跑一次，10 秒完成），Mac 需要保持开机。
+---
+
+## 核心原则
+
+**不要把飞书临时 URL 当成永久资源。**
+
+飞书附件的播放 / 下载地址会过期。正确做法不是让用户在本地电脑上定时跑脚本，而是：
+
+1. 从飞书多维表格读取最新记录
+2. 调飞书 API 把附件 `file_token` 解析成临时 URL
+3. 生成 `api/*.json`
+4. 提交回 GitHub 仓库
+5. 让 GitHub Pages 自动重新部署
+
+也就是：
+
+`Feishu Bitable -> refresh.py -> api/*.json -> GitHub Pages`
 
 ---
 
 ## 执行流程
 
-### Step 0：环境检查（自动）
+### Step 0：环境检查
 
-第一件事，检查所有工具是否就绪：
+先检查本地是否具备初始化所需工具：
 
 ```bash
 for cmd in node python3 gh git; do
-  which $cmd > /dev/null 2>&1 && echo "✅ $cmd" || echo "❌ $cmd 缺失"
+  which "$cmd" >/dev/null 2>&1 && echo "OK  $cmd" || echo "MISS $cmd"
 done
-lark-cli --version > /dev/null 2>&1 && echo "✅ lark-cli" || echo "❌ lark-cli 缺失"
-lark-cli whoami > /dev/null 2>&1 && echo "✅ 飞书已授权" || echo "⚠️  飞书未授权"
-gh auth status > /dev/null 2>&1 && echo "✅ GitHub 已登录" || echo "⚠️  GitHub 未登录"
+lark-cli --version >/dev/null 2>&1 && echo "OK  lark-cli" || echo "MISS lark-cli"
+gh auth status >/dev/null 2>&1 && echo "OK  GitHub auth" || echo "MISS GitHub auth"
 ```
 
-**如果有缺失，告诉用户发给 Claude Code 的指令：**
-
-> 帮我在这台 Mac 上安装：lark-cli（飞书命令行工具，npm 包）、gh（GitHub CLI）。需要的话先装 Node.js。装好后帮我完成飞书登录（lark-cli login）和 GitHub 登录（gh auth login）。
-
-等用户确认「全部 ✅」后再继续。
+如果缺少工具，再让用户安装。  
+如果 `gh` 没登录，先完成 GitHub 登录。
 
 ---
 
-### Step 1：导出飞书数据
+### Step 1：拿到飞书 Base 和正确的数据表
 
-**向用户提问：**
+向用户要飞书多维表格链接，例如：
 
-> 请把你的飞书多维表格链接发给我。
-> 格式类似：`https://xxx.feishu.cn/base/AbCdEfGhIj`
+`https://my.feishu.cn/base/AbCdEfGhIjk`
 
-拿到链接后，解析 app_token（/base/ 后面那串）。
+从 URL 里解析出 `app_token`。
 
-**询问字段信息：**
-> 你的视频/图片存在哪个字段里？（发给我字段名，通常叫「样片」「附件」「视频」之类）
-> 另外，你希望网站上展示哪些信息？（比如标题、分类、时长、使用的 AI 工具……把你有的字段名告诉我）
-
-**自动执行导出：**
+然后列出所有表：
 
 ```bash
-APP_TOKEN="[解析出来的 token]"
-
-# 先查表格列表，拿 table_id
-lark-cli api GET "/open-apis/bitable/v1/apps/${APP_TOKEN}/tables" \
-  > /tmp/feishu_tables.json
-
-# 导出第一个表的所有记录（如有多个表让用户选）
-TABLE_ID="[第一个或用户选的]"
-lark-cli api GET "/open-apis/bitable/v1/apps/${APP_TOKEN}/tables/${TABLE_ID}/records" \
-  --params '{"page_size": 100}' \
-  > /tmp/feishu_records.json
+lark-cli api GET "/open-apis/bitable/v1/apps/${APP_TOKEN}/tables"
 ```
 
-**自动提取 file_token 和字段数据：**
+**不要默认选第一张表。**  
+很多 Base 里会同时存在“空模板表”和“真正有作品的素材表”。要继续读取记录并验证：
 
-```python
-import json
+- 哪张表有真实附件字段
+- 哪张表记录数正确
+- 哪张表里字段名是用户要展示的内容
 
-with open('/tmp/feishu_records.json') as f:
-    data = json.load(f)
+优先找这些字段：
+- 视频字段：`样片` / `视频` / `附件`
+- 封面字段：`封面` / `封面图` / `海报` / `图片`
+- 标题字段：`内容` / `标题` / `作品名称`
+- 分类字段：`类型` / `分类`
+- 时长字段：`时长`
+- 工具字段：`AI工具` / `工具`
+- 排序字段：`序号`
 
-records = data['data']['items']
-all_tokens = []
-clean_records = []
-
-for r in records:
-    fields = r.get('fields', {})
-    tokens_in_record = []
-    
-    for key, val in fields.items():
-        if isinstance(val, list):
-            for item in val:
-                if isinstance(item, dict) and 'file_token' in item:
-                    tokens_in_record.append(item['file_token'])
-                    all_tokens.append(item['file_token'])
-    
-    if tokens_in_record:
-        clean_records.append({
-            'tokens': tokens_in_record,
-            'fields': fields
-        })
-
-print(f"找到 {len(clean_records)} 条记录，{len(all_tokens)} 个附件 file_token")
-```
-
-**向用户展示结果，等确认：**
-> 我找到了 N 条记录、M 个视频/图片附件。字段有：[列出字段名]。这些数据齐全吗？确认后我开始生成网页。
+如果一张表只有 `文本 / 单选 / 日期 / 附件` 这种空模板字段，继续换表，不要生成网站。
 
 ---
 
-### Step 2：生成 HTML 网页
+### Step 2：验证飞书权限
 
-**向用户询问风格（必选一个）：**
+要让 GitHub Actions 能自动刷新，飞书应用必须至少能：
 
-```
-我要帮你生成网站，先选个风格：
+- 读取多维表记录
+- 读取附件媒体链接
 
-A. 暖色系 Aesop 风  → 米白底 + 琥珀色调，适合艺术/时尚/创意类
-B. 极简冷色系        → 白底 + 深灰，适合商业/科技/纪录片类
-C. 深色沉浸感        → 黑底 + 金色，适合电影/视觉艺术类
-D. 自定义            → 告诉我你想要的感觉
-```
+执行方案里要显式依赖这 4 个 secrets：
 
-**询问布局细节（快速确认，可跳过用默认值）：**
+- `LARK_APP_ID`
+- `LARK_APP_SECRET`
+- `LARK_BASE_TOKEN`
+- `LARK_TABLE_ID`
 
-```
-默认布局是：4列瀑布流 + 顶部分类筛选 + 点击播放。
-要改吗？（不改就直接说"用默认的"）
-```
+如果用户本机已经有可用的飞书应用配置，可以复用。否则要明确告诉用户去飞书开放平台补权限和密钥。
 
-**自动生成 index.html：**
+---
 
-根据飞书数据和用户选择的风格，生成单页 HTML，要求：
-- 所有附件用 `data-token="file_token"` 存储，不直接放 src
-- 页面加载时 `fetch('/api/videos.json')` 填充播放链接
-- inline CSS（不依赖外部 CSS 框架，不用 flex/grid 以保证兼容性）
-- 分类筛选按钮（根据飞书数据中的分类字段自动生成）
-- 响应式：桌面4列、平板2列、手机1列（用 float 或百分比宽度）
-- 出错时优雅降级（视频加载失败显示占位图，不崩溃）
+### Step 3：导出结构化作品数据
 
-**让用户预览：**
+不要只提取 `file_token` 列表。  
+应构建一份前端可直接消费的结构化数据，至少包含：
+
+- title
+- categories
+- duration
+- tools
+- order
+- video_token
+- cover_token
+
+推荐输出：
+
+- `api/portfolio.json`：完整作品数组
+- `api/videos.json`：`video_token -> tmp_download_url`
+- `api/covers.json`：`cover_token -> tmp_download_url`
+
+前端可以继续用静态 HTML + JS，也可以完全由 `portfolio.json` 渲染。
+
+---
+
+### Step 4：生成前端页面
+
+默认生成静态页面，要求：
+
+- 响应式作品网格
+- 分类筛选
+- 点击卡片播放
+- 全屏放大播放
+- 只允许一个视频同时播放
+- 封面优先使用飞书封面字段，没有封面时允许退化为无 poster
+
+数据绑定原则：
+
+- HTML 不要写死过期 URL
+- 页面运行时拉取 `/api/videos.json` 和 `/api/covers.json`
+- 或者直接拉 `/api/portfolio.json` 渲染卡片
+
+如果用户已有站点，优先保留现有视觉样式，只替换数据来源和刷新机制。
+
+---
+
+### Step 5：创建仓库并部署 GitHub Pages
+
+标准流程：
 
 ```bash
-# 用默认浏览器打开本地预览
-open index.html
+gh repo create <repo-name> --public --source=. --remote=origin --push
 ```
 
-> 我已生成 index.html 并打开了预览。看看效果，告诉我要改什么（颜色、字体、间距、卡片样式……随便说），改到满意了再继续。
+然后确认 Pages 来源是：
 
-等用户说「可以了」或「发布吧」之类才继续。
+- branch: `main`
+- path: `/`
 
----
-
-### Step 3：GitHub 上线
-
-**询问用户：**
-> 你的 GitHub 用户名是？仓库想叫什么名字？（默认用 `portfolio`）
-
-**自动执行：**
+检查：
 
 ```bash
-GH_USER="[用户名]"
-REPO_NAME="[仓库名]"
-PROJECT_DIR="[项目目录]"
-
-cd $PROJECT_DIR
-
-# 创建 GitHub 仓库（公开，Pages 才能免费用）
-gh repo create $REPO_NAME --public --source=. --remote=origin --push
-
-# 开启 GitHub Pages
-gh api -X POST /repos/$GH_USER/$REPO_NAME/pages \
-  -f source[branch]=main \
-  -f source[path]=/
-
-echo "网站地址：https://$GH_USER.github.io/$REPO_NAME"
+gh api repos/<owner>/<repo>/pages
 ```
 
-**等待并告知：**
-> 代码已上传，GitHub Pages 正在构建，通常 2-5 分钟后可以访问：
-> **https://[用户名].github.io/[仓库名]**
-> 
-> 先等一下，我告诉你视频还不能播，因为还没跑刷新脚本。
+必须确认：
+- Pages 已启用
+- `cname` 正常（如果有自定义域名）
+- source 指向 `main` 和根目录
 
 ---
 
-### Step 4：自动刷新视频链接
+### Step 6：生成自动刷新脚本
 
-**说明：**
-> 现在网站上线了但视频还播不了——飞书的播放链接需要临时获取，而且 24 小时后失效。接下来我给你的 Mac 设一个定时任务，每 20 小时自动换新链接，推到 GitHub。
+刷新脚本应采用下面这条路线：
 
-**自动生成 `scripts/refresh-videos.py`：**
+1. 用 `app_id + app_secret` 换 `tenant_access_token`
+2. 读取 Bitable records
+3. 从记录里提取视频和封面附件 token
+4. 批量调用 `batch_get_tmp_download_url`
+5. 写入 `api/videos.json`、`api/covers.json`、`api/portfolio.json`
 
-填入从 Step 1 提取的所有 file_token，脚本逻辑：
-1. 分批（每批5个）调用飞书 API 获取临时下载 URL
-2. 写入 `api/videos.json`
-3. Git commit + push 到 GitHub
+关键要求：
 
-（代码结构参考 `/Users/jane/projects/xiaoerai-portfolio/scripts/refresh-videos.py`，直接复用这个经过验证的版本，替换 ALL_TOKENS 列表和路径变量。）
+- 支持分页读取 records
+- 批量请求按 5 个 token 一组
+- 不要把 token 列表硬编码在脚本里
+- 优先从真实表记录动态生成
+- 允许多种字段名候选
 
-**自动检测 nvm node 路径：**
+推荐文件名：
+
+- `refresh.py`
+
+---
+
+### Step 7：生成 GitHub Actions Workflow
+
+不要再使用本地 `launchd` 作为默认方案。  
+默认方案必须是 GitHub Actions。
+
+工作流要求：
+
+- 支持 `workflow_dispatch`
+- 支持 `schedule`，默认每 12 小时执行一次
+- 执行 `python refresh.py`
+- 自动提交 `api/videos.json`、`api/covers.json`、`api/portfolio.json`
+
+标准 secrets：
+
+- `LARK_APP_ID`
+- `LARK_APP_SECRET`
+- `LARK_BASE_TOKEN`
+- `LARK_TABLE_ID`
+
+标准文件：
+
+- `.github/workflows/refresh.yml`
+
+---
+
+### Step 8：把 Secrets 配进仓库
+
+如果当前环境已经有这些值，并且用户明确让你落地，就直接配置：
 
 ```bash
-# 找到 lark-cli 实际使用的 node
-NODE_PATH=$(which node)
-LARK_PATH=$(which lark-cli)
-echo "node: $NODE_PATH"
-echo "lark-cli: $LARK_PATH"
+gh secret set LARK_APP_ID -R <owner>/<repo>
+gh secret set LARK_APP_SECRET -R <owner>/<repo>
+gh secret set LARK_BASE_TOKEN -R <owner>/<repo>
+gh secret set LARK_TABLE_ID -R <owner>/<repo>
 ```
 
-**自动生成并注册 launchd plist：**
+然后验证：
 
 ```bash
-PLIST_LABEL="[反域名].refresh-videos"
-PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_LABEL}.plist"
-SCRIPT_PATH="$PROJECT_DIR/scripts/refresh-videos.py"
-LOG_PATH="$HOME/.logs/refresh-videos.log"
-NODE_BIN_DIR=$(dirname $NODE_PATH)
-
-cat > $PLIST_PATH << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>$PLIST_LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/python3</string>
-    <string>$SCRIPT_PATH</string>
-  </array>
-  <key>StartInterval</key><integer>72000</integer>
-  <key>RunAtLoad</key><false/>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key><string>$NODE_BIN_DIR:/usr/local/bin:/usr/bin:/bin</string>
-    <key>HOME</key><string>$HOME</string>
-  </dict>
-  <key>StandardOutPath</key><string>$LOG_PATH</string>
-  <key>StandardErrorPath</key><string>$LOG_PATH</string>
-</dict>
-</plist>
-EOF
-
-# 注册
-launchctl load $PLIST_PATH
-
-# 立刻测试跑一次
-launchctl start $PLIST_LABEL
-sleep 15
-
-# 看结果
-echo "=== 日志 ==="
-tail -20 $LOG_PATH
+gh secret list -R <owner>/<repo>
 ```
 
-**向用户确认：**
-> 日志显示成功了吗？你看到「Pushed.」说明链接已刷新，视频应该可以播了。
-> 打开网站试试：https://[地址]
+如果缺值，就停在这里，明确告诉用户缺哪个，不要伪造。
 
 ---
 
-### Step 5：域名绑定（可选）
+### Step 9：手动触发并验证整条链路
 
-**询问：**
-> 要绑定自己的域名吗？有的话现在可以配，没有的话 github.io 地址就够用了。
-
-**如果用户有域名，给出操作指引：**
-
-> 去你的域名控制台（NameSilo / 阿里云 / 腾讯云），添加这几条 DNS 记录：
->
-> | 类型 | 主机记录 | 值 |
-> |---|---|---|
-> | A | @ | 185.199.108.153 |
-> | A | @ | 185.199.109.153 |
-> | A | @ | 185.199.110.153 |
-> | A | @ | 185.199.111.153 |
-> | CNAME | www | [用户名].github.io |
->
-> 加好之后告诉我你的域名（比如 `mysite.xyz`），我来配 GitHub 那边。
-
-**用户回复域名后，自动执行：**
+完成配置后，立刻手动跑一次 workflow：
 
 ```bash
-DOMAIN="[用户填写]"
-echo "$DOMAIN" > $PROJECT_DIR/CNAME
-git -C $PROJECT_DIR add CNAME
-git -C $PROJECT_DIR commit -m "add: custom domain $DOMAIN"
-git -C $PROJECT_DIR push origin main
-
-# GitHub Pages 设置自定义域名
-gh api -X PUT /repos/$GH_USER/$REPO_NAME/pages \
-  -f cname=$DOMAIN
+gh workflow run refresh.yml -R <owner>/<repo>
+gh run list -R <owner>/<repo> --limit 3
+gh run watch <run-id> -R <owner>/<repo> --exit-status
 ```
 
-> DNS 生效需要 10 分钟到几小时。生效后用 `https://[域名]` 访问。
-> GitHub Pages 会自动申请 HTTPS 证书，完成后地址栏会出现锁。
+再检查线上结果：
+
+```bash
+python3 - <<'PY'
+import json, urllib.request, time
+url = f'https://<domain-or-pages-url>/api/videos.json?t={int(time.time())}'
+with urllib.request.urlopen(url, timeout=20) as r:
+    data = json.load(r)
+print(data.get('_refreshed_at'))
+print(data.get('_count'))
+PY
+```
+
+然后抽测 1 条视频：
+
+- 状态码应为 `206` 或 `200`
+- `content-type` 应为 `video/mp4` 或可播放媒体类型
+
+如果线上 `api/videos.json` 还是旧时间：
+- 先看 Pages 部署是否完成
+- 再看 workflow 是否真的提交了新 JSON
+- 再确认 Pages source 是否指向正确分支和目录
 
 ---
 
-### Step 6：收尾确认
+### Step 10：域名绑定
 
-成功后告知用户：
+如果用户要自定义域名，再做：
 
-```
-✅ 网站已上线：https://[地址]
-✅ 自动刷新：每20小时自动换新链接（日志在 ~/.logs/refresh-videos.log）
-✅ 以后加新作品：在飞书加一行 → 告诉 Claude Code 新的 file_token → push
+- `CNAME` 文件
+- GitHub Pages custom domain 设置
+- DNS 配置引导
 
-下次更新内容时直接说：
-「帮我把新视频加到作品集，file_token 是 [xxx]」
-```
+这部分沿用 GitHub Pages 标准流程，不需要和飞书逻辑耦合。
 
 ---
 
-## 关键技术注意点（执行时参考）
+## 对用户的默认解释
 
-| 问题 | 解决方式 |
-|---|---|
-| lark-cli 每次最多5个 token | 分批调用，每批 BATCH_SIZE=5 |
-| launchd 找不到 lark-cli | plist 里 PATH 必须含 nvm node 路径 |
-| git push SSL 报错 | 用 `env -i HOME=$HOME PATH=$PATH git push origin main` |
-| GitHub Pages 要求公开仓库 | 创建时必须 `--public` |
-| 域名生效后 HTTPS 申请失败 | 在 Pages 设置页点「Enforce HTTPS」或等待自动申请 |
-| 视频上线后还是播不了 | 检查 api/videos.json 是否已推到 GitHub，检查 fetch 路径是否正确 |
+遇到“网站能打开但视频播不了”，优先判断：
+
+1. `api/videos.json` 是否还是旧的
+2. 里面的飞书 URL 是否已过期
+3. 自动刷新 workflow 是否失败
+4. Pages 是否还没重新部署
+
+默认不要先怀疑播放器，也不要先怀疑前端样式。
+
+---
+
+## 成功标准
+
+这个 Skill 完成后，至少要满足：
+
+- 网站已上线
+- GitHub Pages 可访问
+- 视频可播放
+- 仓库里有自动刷新 workflow
+- 仓库里已有 4 个 `LARK_*` secrets
+- 手动触发 workflow 成功
+- 线上 `api/videos.json` 的 `_refreshed_at` 是新时间
+
+---
+
+## 不要再默认做的事
+
+- 不要默认生成本地 `launchd`
+- 不要默认依赖用户 Mac 长期开机
+- 不要硬编码所有 `file_token`
+- 不要只凭第一张表就继续
+- 不要只生成 `videos.json`，忽略封面和结构化记录
+
+---
+
+## 参考实现
+
+如果需要一个已经验证过的做法，参考这些文件结构：
+
+- `refresh.py`
+- `.github/workflows/refresh.yml`
+- `api/videos.json`
+- `api/covers.json`
+- `api/portfolio.json`
+
+优先复用现成仓库模式，再按用户站点样式做适配。
